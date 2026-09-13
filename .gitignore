@@ -18,6 +18,9 @@ build/
 .coverage
 htmlcov/
 
+# Generated / persisted vector store (regenerate via ingest.py)
+knowledge_base/chroma_db/
+
 # Environment / secrets
 .env
 .env.*
