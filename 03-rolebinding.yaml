@@ -1,0 +1,13 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: incident-copilot-readonly-binding
+  namespace: incident-copilot
+subjects:
+  - kind: ServiceAccount
+    name: incident-copilot-reader
+    namespace: incident-copilot
+roleRef:
+  kind: Role
+  name: incident-copilot-readonly
+  apiGroup: rbac.authorization.k8s.io
