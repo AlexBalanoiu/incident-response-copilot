@@ -1,6 +1,8 @@
 import json
 import re
+import sys
 import uuid
+from pathlib import Path
 
 from pydantic import BaseModel, ValidationError
 from google.adk.agents import LlmAgent
@@ -10,6 +12,9 @@ from google.genai import types
 
 from prometheus_tool import query_prometheus
 from loki_tool import query_loki
+
+sys.path.insert(0, str(Path(__file__).parent.parent / "common"))
+from decision_logger import log_decision
 
 APP_NAME = "incident-copilot"
 
@@ -63,24 +68,27 @@ def _extract_json_block(text: str) -> dict:
     return json.loads(match.group(1))
 
 
-def run_triage(user_message: str) -> TriageResult:
-    runner = InMemoryRunner(agent=triage_agent, app_name=APP_NAME)
-    user_id = "local-user"
-    session_id = str(uuid.uuid4())
+def run_triage(user_message: str, incident_id: str = "adhoc") -> TriageResult:
+    with log_decision(incident_id, "triage_agent", user_message) as outcome:
+        runner = InMemoryRunner(agent=triage_agent, app_name=APP_NAME)
+        user_id = "local-user"
+        session_id = str(uuid.uuid4())
 
-    runner.session_service.create_session_sync(
-        app_name=APP_NAME, user_id=user_id, session_id=session_id
-    )
+        runner.session_service.create_session_sync(
+            app_name=APP_NAME, user_id=user_id, session_id=session_id
+        )
 
-    content = types.Content(role="user", parts=[types.Part(text=user_message)])
+        content = types.Content(role="user", parts=[types.Part(text=user_message)])
 
-    final_text = None
-    for event in runner.run(user_id=user_id, session_id=session_id, new_message=content):
-        if event.is_final_response() and event.content and event.content.parts:
-            final_text = event.content.parts[0].text
+        final_text = None
+        for event in runner.run(user_id=user_id, session_id=session_id, new_message=content):
+            if event.is_final_response() and event.content and event.content.parts:
+                final_text = event.content.parts[0].text
 
-    if final_text is None:
-        raise RuntimeError("Agent produced no final response")
+        if final_text is None:
+            raise RuntimeError("Agent produced no final response")
 
-    parsed = _extract_json_block(final_text)
-    return TriageResult(**parsed)
+        parsed = _extract_json_block(final_text)
+        result = TriageResult(**parsed)
+        outcome["output"] = result.model_dump()
+        return result

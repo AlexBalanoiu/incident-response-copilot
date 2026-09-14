@@ -5,3 +5,5 @@ google-adk==2.9.0
 google-genai==2.23.0
 litellm==1.100.1
 chromadb==1.5.9
+kubernetes
+pymysql==1.1.1

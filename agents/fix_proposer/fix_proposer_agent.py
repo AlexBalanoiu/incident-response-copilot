@@ -15,6 +15,9 @@ from retrieval_tool import search_knowledge_base  # reuse, don't duplicate
 
 from safety_policy import validate_fix_safety
 
+sys.path.insert(0, str(Path(__file__).parent.parent / "common"))
+from decision_logger import log_decision
+
 APP_NAME = "incident-copilot"
 
 
@@ -68,35 +71,37 @@ def _extract_json_block(text: str) -> dict:
     return json.loads(match.group(1))
 
 
-def run_fix_proposer(root_cause_description: str) -> FixProposal:
-    runner = InMemoryRunner(agent=fix_proposer_agent, app_name=APP_NAME)
-    user_id = "local-user"
-    session_id = str(uuid.uuid4())
+def run_fix_proposer(root_cause_description: str, incident_id: str = "adhoc") -> FixProposal:
+    with log_decision(incident_id, "fix_proposer_agent", root_cause_description) as outcome:
+        runner = InMemoryRunner(agent=fix_proposer_agent, app_name=APP_NAME)
+        user_id = "local-user"
+        session_id = str(uuid.uuid4())
 
-    runner.session_service.create_session_sync(
-        app_name=APP_NAME, user_id=user_id, session_id=session_id
-    )
-
-    content = types.Content(role="user", parts=[types.Part(text=root_cause_description)])
-
-    final_text = None
-    for event in runner.run(user_id=user_id, session_id=session_id, new_message=content):
-        if event.is_final_response() and event.content and event.content.parts:
-            final_text = event.content.parts[0].text
-
-    if final_text is None:
-        raise RuntimeError("Agent produced no final response")
-
-    parsed = _extract_json_block(final_text)
-    proposal = FixProposal(**parsed)
-
-    # Do not trust the agent's self-reported safety_status - re-verify
-    # deterministically against the actual combined output.
-    combined_text = "\n".join(proposal.fix_steps) + "\n" + proposal.suggested_yaml
-    check = validate_fix_safety(combined_text)
-    if check["status"] != "safe":
-        raise ValueError(
-            f"Agent's final proposal failed independent safety check: {check['violations']}"
+        runner.session_service.create_session_sync(
+            app_name=APP_NAME, user_id=user_id, session_id=session_id
         )
 
-    return proposal
+        content = types.Content(role="user", parts=[types.Part(text=root_cause_description)])
+
+        final_text = None
+        for event in runner.run(user_id=user_id, session_id=session_id, new_message=content):
+            if event.is_final_response() and event.content and event.content.parts:
+                final_text = event.content.parts[0].text
+
+        if final_text is None:
+            raise RuntimeError("Agent produced no final response")
+
+        parsed = _extract_json_block(final_text)
+        proposal = FixProposal(**parsed)
+
+        # Do not trust the agent's self-reported safety_status - re-verify
+        # deterministically against the actual combined output.
+        combined_text = "\n".join(proposal.fix_steps) + "\n" + proposal.suggested_yaml
+        check = validate_fix_safety(combined_text)
+        if check["status"] != "safe":
+            raise ValueError(
+                f"Agent's final proposal failed independent safety check: {check['violations']}"
+            )
+
+        outcome["output"] = proposal.model_dump()
+        return proposal

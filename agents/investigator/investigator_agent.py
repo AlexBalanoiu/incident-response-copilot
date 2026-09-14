@@ -1,6 +1,8 @@
 import json
 import re
+import sys
 import uuid
+from pathlib import Path
 
 from pydantic import BaseModel, ValidationError
 from google.adk.agents import LlmAgent
@@ -9,6 +11,9 @@ from google.adk.runners import InMemoryRunner
 from google.genai import types
 
 from retrieval_tool import search_knowledge_base
+
+sys.path.insert(0, str(Path(__file__).parent.parent / "common"))
+from decision_logger import log_decision
 
 APP_NAME = "incident-copilot"
 
@@ -64,24 +69,27 @@ def _extract_json_block(text: str) -> dict:
     return json.loads(match.group(1))
 
 
-def run_investigation(symptom_description: str) -> InvestigationResult:
-    runner = InMemoryRunner(agent=investigator_agent, app_name=APP_NAME)
-    user_id = "local-user"
-    session_id = str(uuid.uuid4())
+def run_investigation(symptom_description: str, incident_id: str = "adhoc") -> InvestigationResult:
+    with log_decision(incident_id, "investigator_agent", symptom_description) as outcome:
+        runner = InMemoryRunner(agent=investigator_agent, app_name=APP_NAME)
+        user_id = "local-user"
+        session_id = str(uuid.uuid4())
 
-    runner.session_service.create_session_sync(
-        app_name=APP_NAME, user_id=user_id, session_id=session_id
-    )
+        runner.session_service.create_session_sync(
+            app_name=APP_NAME, user_id=user_id, session_id=session_id
+        )
 
-    content = types.Content(role="user", parts=[types.Part(text=symptom_description)])
+        content = types.Content(role="user", parts=[types.Part(text=symptom_description)])
 
-    final_text = None
-    for event in runner.run(user_id=user_id, session_id=session_id, new_message=content):
-        if event.is_final_response() and event.content and event.content.parts:
-            final_text = event.content.parts[0].text
+        final_text = None
+        for event in runner.run(user_id=user_id, session_id=session_id, new_message=content):
+            if event.is_final_response() and event.content and event.content.parts:
+                final_text = event.content.parts[0].text
 
-    if final_text is None:
-        raise RuntimeError("Agent produced no final response")
+        if final_text is None:
+            raise RuntimeError("Agent produced no final response")
 
-    parsed = _extract_json_block(final_text)
-    return InvestigationResult(**parsed)
+        parsed = _extract_json_block(final_text)
+        result = InvestigationResult(**parsed)
+        outcome["output"] = result.model_dump()
+        return result
